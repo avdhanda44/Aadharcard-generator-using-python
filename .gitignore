@@ -1,0 +1,8 @@
+.DS_Store
+.venv/
+__pycache__/
+outputs/*
+!outputs/aadhar/
+!outputs/aadhar/.gitkeep
+!outputs/ground_truth/
+!outputs/ground_truth/.gitkeep

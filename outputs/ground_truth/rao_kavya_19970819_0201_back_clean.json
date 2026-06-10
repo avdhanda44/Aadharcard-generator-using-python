@@ -1,0 +1,24 @@
+{
+    "document_type": "aadhaar",
+    "side": "back",
+    "variant": "clean",
+    "aadhaar_number": "0201 3265 5268",
+    "name": "Kavya Rao",
+    "hindi_name": "काव्या राव",
+    "father_name": "Mahesh Rao",
+    "email": "kavya.demo@example.com",
+    "mobile": "9876500201",
+    "date_of_birth": "1997-08-19",
+    "gender": "FEMALE",
+    "blood_group": "A+",
+    "address": "21 Lake View Road Hyderabad Telangana 500081",
+    "address_parts": {
+        "house": "21",
+        "street": "Lake View Road",
+        "city": "Hyderabad",
+        "state": "Telangana",
+        "pincode": "500081"
+    },
+    "source_file": "rao_kavya_19970819_0201_back_clean.png",
+    "is_demo": true
+}

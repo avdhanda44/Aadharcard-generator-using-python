@@ -1,0 +1,24 @@
+{
+    "document_type": "aadhaar",
+    "side": "front",
+    "variant": "blurred",
+    "aadhaar_number": "0204 3268 5271",
+    "name": "Nikhil Singh",
+    "hindi_name": "निखिल सिंह",
+    "father_name": "Pratap Singh",
+    "email": "nikhil.demo@example.com",
+    "mobile": "9876500204",
+    "date_of_birth": "1988-07-11",
+    "gender": "MALE",
+    "blood_group": "O+",
+    "address": "144 Sector 17 Chandigarh Punjab 160017",
+    "address_parts": {
+        "house": "144",
+        "street": "Sector 17",
+        "city": "Chandigarh",
+        "state": "Punjab",
+        "pincode": "160017"
+    },
+    "source_file": "singh_nikhil_19880711_0204_front_blurred.png",
+    "is_demo": true
+}

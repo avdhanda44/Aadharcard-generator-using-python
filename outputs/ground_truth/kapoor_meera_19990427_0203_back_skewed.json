@@ -1,0 +1,24 @@
+{
+    "document_type": "aadhaar",
+    "side": "back",
+    "variant": "skewed",
+    "aadhaar_number": "0203 3267 5270",
+    "name": "Meera Kapoor",
+    "hindi_name": "मीरा कपूर",
+    "father_name": "Amit Kapoor",
+    "email": "meera.demo@example.com",
+    "mobile": "9876500203",
+    "date_of_birth": "1999-04-27",
+    "gender": "FEMALE",
+    "blood_group": "AB-",
+    "address": "9C Civil Lines Jaipur Rajasthan 302006",
+    "address_parts": {
+        "house": "9C",
+        "street": "Civil Lines",
+        "city": "Jaipur",
+        "state": "Rajasthan",
+        "pincode": "302006"
+    },
+    "source_file": "kapoor_meera_19990427_0203_back_skewed.png",
+    "is_demo": true
+}

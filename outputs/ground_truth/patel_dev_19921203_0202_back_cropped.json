@@ -1,0 +1,24 @@
+{
+    "document_type": "aadhaar",
+    "side": "back",
+    "variant": "cropped",
+    "aadhaar_number": "0202 3266 5269",
+    "name": "Dev Patel",
+    "hindi_name": "देव पटेल",
+    "father_name": "Nilesh Patel",
+    "email": "dev.demo@example.com",
+    "mobile": "9876500202",
+    "date_of_birth": "1992-12-03",
+    "gender": "MALE",
+    "blood_group": "B-",
+    "address": "56 Ring Road Ahmedabad Gujarat 380015",
+    "address_parts": {
+        "house": "56",
+        "street": "Ring Road",
+        "city": "Ahmedabad",
+        "state": "Gujarat",
+        "pincode": "380015"
+    },
+    "source_file": "patel_dev_19921203_0202_back_cropped.png",
+    "is_demo": true
+}
