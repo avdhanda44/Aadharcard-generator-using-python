@@ -26,6 +26,12 @@ IMAGE_VARIANTS = {
     "cropped": "png",
     "skewed": "png",
     "mobile_photo": "jpg",
+    "low_light": "png",
+    "overexposed": "png",
+    "shadow": "png",
+    "partial_crop": "png",
+    "low_resolution": "png",
+    "jpeg_heavy_compression": "jpg",
 }
 
 
@@ -139,11 +145,16 @@ def record_to_data(record):
         "fullname": record["Fullname"],
         "hindi_name": hindi_name_for(record["Fullname"]),
         "fathername": record["Fathername"],
+        "relationship_type": "father",
+        "relationship_label": "Father",
+        "relationship_name": record["Fathername"],
+        "relationship_hindi_name": hindi_name_for(record["Fathername"]),
         "email": record["Email"],
         "gender": gender_map.get(record["Gender"], str(record["Gender"])),
         "bloodgroup": record["Bloodgroup"],
         "mobile": record["MobileNumber"],
         "dob": record["DateofBirth"],
+        "dob_display": "yob",
         "house": record["HouseNumber"],
         "street": record["StreetName"],
         "city": record["City"],
@@ -251,8 +262,76 @@ def gender_label(value):
     return str(value)
 
 
+def dob_display_mode(data):
+    mode = str(data.get("dob_display") or "yob").strip().lower()
+    if mode == "random":
+        return random.Random(int(data.get("id") or 0) + 17).choice(["dob", "yob"])
+    if mode in {"dob", "date_of_birth"}:
+        return "dob"
+    return "yob"
+
+
+def front_birth_label(data):
+    if dob_display_mode(data) == "dob":
+        return f"जन्म तिथि / DOB : {data['dob']}"
+    return f"जन्म वर्ष / Year of Birth : {format_year(data['dob'])}"
+
+
+def relationship_label_for(data):
+    label = str(data.get("relationship_label") or data.get("relationship_type") or "Father").strip()
+    normalized = label.lower().replace(".", "").replace(" ", "_")
+
+    if normalized in {"s/o", "so", "son_of"}:
+        return "S/O"
+    if normalized in {"c/o", "co", "care_of", "care-of"}:
+        return "C/O"
+    if normalized in {"w/o", "wo", "wife_of"}:
+        return "W/O"
+    if normalized == "husband":
+        return "Husband"
+    return "Father"
+
+
+def relationship_type_for(data):
+    label = relationship_label_for(data)
+    if label in {"Husband", "W/O"}:
+        return "husband"
+    if label == "C/O":
+        return "care_of"
+    return "father"
+
+
+def relationship_value_for(data):
+    return str(data.get("relationship_name") or data.get("fathername") or "").strip()
+
+
+def relationship_hindi_value_for(data):
+    value = str(data.get("relationship_hindi_name") or "").strip()
+    if value:
+        return value
+    relationship_value = relationship_value_for(data)
+    return hindi_name_for(relationship_value) if relationship_value else ""
+
+
+def relationship_hindi_label_for(data):
+    label = relationship_label_for(data)
+    if label == "S/O":
+        return "पुत्र"
+    if label == "C/O":
+        return "मार्फत"
+    if label == "W/O":
+        return "पत्नी"
+    if label == "Husband":
+        return "पति"
+    return "पिता"
+
+
 def hindi_address_for(data):
-    lines = [f"पता: {data.get('hindi_name') or hindi_name_for(data['fullname'])}"]
+    lines = ["पता:"]
+    relationship_value = relationship_hindi_value_for(data)
+    if relationship_value:
+        lines.append(f"{relationship_hindi_label_for(data)}: {relationship_value}")
+
     house = str(data.get('house') or '').strip()
     street = str(data.get('street') or '').strip()
     if house or street:
@@ -272,9 +351,9 @@ def hindi_address_for(data):
 
 def english_address_for(data):
     lines = []
-    father = str(data.get('fathername') or '').strip()
-    if father:
-        lines.append(f"Father: {father}")
+    relationship_value = relationship_value_for(data)
+    if relationship_value:
+        lines.append(f"{relationship_label_for(data)}: {relationship_value}")
 
     house = str(data.get('house') or '').strip()
     street = str(data.get('street') or '').strip()
@@ -409,7 +488,7 @@ def create_card_image(data):
     hindi_name = data.get("hindi_name") or hindi_name_for(data["fullname"])
     draw_hindi_text(draw, (text_x, 146), hindi_name, size=29, bold=True)
     draw_text(draw, (text_x, 190), data["fullname"], size=29)
-    draw_hindi_text(draw, (text_x, 263), f"जन्म वर्ष / Year of Birth : {format_year(data['dob'])}", size=27)
+    draw_hindi_text(draw, (text_x, 263), front_birth_label(data), size=27)
     draw_hindi_text(draw, (text_x, 318), gender_label(data["gender"]), size=27)
 
     qr_box = (650, 250, 205, 205)
@@ -479,12 +558,12 @@ def normalized_date(value):
     return f"{year}0000"
 
 
-def output_stem(data):
+def output_stem(data, side):
     parts = re.findall(r"[A-Za-z0-9]+", str(data["fullname"]).lower())
     first_name = parts[0] if parts else "unknown"
     last_name = parts[-1] if len(parts) > 1 else first_name
     dob = normalized_date(data["dob"])
-    return f"{last_name}_{first_name}_{dob}_{int(data['id']):04d}"
+    return f"{last_name}_{first_name}_{side}_{dob}"
 
 
 def full_address_for_ground_truth(data):
@@ -498,37 +577,71 @@ def full_address_for_ground_truth(data):
     return " ".join(str(part).strip() for part in parts if str(part or "").strip())
 
 
+def full_hindi_address_for_ground_truth(data):
+    parts = [
+        data.get("house"),
+        hindi_address_part(data.get("street") or ""),
+        hindi_address_part(data.get("city") or ""),
+        hindi_address_part(data.get("state") or ""),
+        data.get("pincode"),
+    ]
+    return " ".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
+def address_parts_for_ground_truth(data):
+    return {
+        "house": str(data.get("house", "")),
+        "street": str(data.get("street", "")),
+        "city": str(data.get("city", "")),
+        "state": str(data.get("state", "")),
+        "pincode": str(data.get("pincode", "")),
+    }
+
+
 def ground_truth_payload(data, side, variant, source_file):
     record_id = int(data["id"])
-    return {
-        "document_type": "aadhaar",
-        "side": side,
-        "variant": variant,
-        "aadhaar_number": aadhaar_number(record_id),
-        "name": data["fullname"],
-        "hindi_name": data.get("hindi_name") or hindi_name_for(data["fullname"]),
-        "father_name": data.get("fathername", ""),
-        "email": data.get("email", ""),
-        "mobile": str(data.get("mobile", "")),
-        "date_of_birth": data["dob"],
-        "gender": data["gender"],
-        "blood_group": data.get("bloodgroup", ""),
-        "address": full_address_for_ground_truth(data),
-        "address_parts": {
-            "house": str(data.get("house", "")),
-            "street": str(data.get("street", "")),
-            "city": str(data.get("city", "")),
-            "state": str(data.get("state", "")),
+
+    if side == "front":
+        display_mode = dob_display_mode(data)
+        return {
+            "aadhaar_number": aadhaar_number(record_id),
+            "vid": "",
+            "name": data["fullname"],
+            "hindi_name": data.get("hindi_name") or hindi_name_for(data["fullname"]),
+            "date_of_birth": data["dob"] if display_mode == "dob" else "",
+            "year_of_birth": format_year(data["dob"]) if display_mode == "yob" else "",
+            "gender": data["gender"],
+        }
+
+    if side == "back":
+        relationship_type = relationship_type_for(data)
+        relationship_label = relationship_label_for(data)
+        relationship_value = relationship_value_for(data)
+        relationship_hindi_label = relationship_hindi_label_for(data)
+        relationship_hindi_value = relationship_hindi_value_for(data)
+        return {
+            "aadhaar_number": aadhaar_number(record_id),
+            "vid": "",
+            "relationship_label": relationship_label,
+            "care_of": relationship_value if relationship_type == "care_of" else "",
+            "father_name": relationship_value if relationship_type == "father" else "",
+            "husband_name": relationship_value if relationship_type == "husband" else "",
+            "hindi_relationship_label": relationship_hindi_label,
+            "hindi_care_of": relationship_hindi_value if relationship_type == "care_of" else "",
+            "hindi_father_name": relationship_hindi_value if relationship_type == "father" else "",
+            "hindi_husband_name": relationship_hindi_value if relationship_type == "husband" else "",
+            "address": full_address_for_ground_truth(data),
+            "hindi_address": full_hindi_address_for_ground_truth(data),
+            "hindi_address_lines": hindi_address_for(data),
             "pincode": str(data.get("pincode", "")),
-        },
-        "source_file": source_file.name,
-        "is_demo": True,
-    }
+        }
+
+    raise ValueError("side must be one of: front, back")
 
 
 def save_ground_truth(data, side, variant, source_file):
     GROUND_TRUTH_DIR.mkdir(parents=True, exist_ok=True)
-    path = GROUND_TRUTH_DIR / f"{output_stem(data)}_{side}_{variant}.json"
+    path = GROUND_TRUTH_DIR / f"{output_stem(data, side)}_{variant}.json"
     payload = ground_truth_payload(data, side, variant, source_file)
     path.write_text(json.dumps(payload, indent=4, ensure_ascii=False), encoding="utf-8")
     return path
@@ -606,6 +719,71 @@ def add_mobile_lighting(image, rng):
     return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
 
+def apply_low_light(image, rng):
+    image = ImageEnhance.Brightness(image).enhance(rng.uniform(0.42, 0.62))
+    image = ImageEnhance.Contrast(image).enhance(rng.uniform(0.82, 1.08))
+    return image.filter(ImageFilter.GaussianBlur(radius=rng.uniform(0.2, 0.7)))
+
+
+def apply_overexposed(image, rng):
+    image = ImageEnhance.Brightness(image).enhance(rng.uniform(1.38, 1.72))
+    image = ImageEnhance.Contrast(image).enhance(rng.uniform(0.72, 0.92))
+    return image
+
+
+def apply_shadow(image, rng):
+    base = image.convert("RGBA")
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    width, height = base.size
+    side = rng.choice(["left", "right", "top"])
+
+    if side == "left":
+        points = [(0, 0), (int(width * 0.48), 0), (int(width * 0.24), height), (0, height)]
+    elif side == "right":
+        points = [(width, 0), (int(width * 0.58), 0), (int(width * 0.78), height), (width, height)]
+    else:
+        points = [(0, 0), (width, 0), (width, int(height * 0.34)), (0, int(height * 0.52))]
+
+    draw.polygon(points, fill=(0, 0, 0, rng.randint(70, 115)))
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+
+def apply_partial_crop(image, rng):
+    width, height = image.size
+    crop_side = rng.choice(["left", "right", "top", "bottom"])
+    crop_ratio = rng.uniform(0.08, 0.18)
+    left, top, right, bottom = 0, 0, width, height
+
+    if crop_side == "left":
+        left = int(width * crop_ratio)
+    elif crop_side == "right":
+        right = int(width * (1 - crop_ratio))
+    elif crop_side == "top":
+        top = int(height * crop_ratio)
+    else:
+        bottom = int(height * (1 - crop_ratio))
+
+    cropped = image.crop((left, top, right, bottom))
+    canvas = Image.new("RGB", (width, height), (238, 238, 232))
+    canvas.paste(cropped.resize((right - left, bottom - top), Image.Resampling.LANCZOS), (left, top))
+    return canvas
+
+
+def apply_low_resolution(image, rng):
+    width, height = image.size
+    scale = rng.uniform(0.28, 0.42)
+    small = image.resize((int(width * scale), int(height * scale)), Image.Resampling.BILINEAR)
+    return small.resize((width, height), Image.Resampling.BILINEAR)
+
+
+def apply_jpeg_heavy_compression(image, rng):
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="JPEG", quality=rng.randint(12, 24), optimize=True)
+    buffer.seek(0)
+    return Image.open(buffer).convert("RGB")
+
+
 def variant_images(image, seed):
     rng = random.Random(seed)
     clean = image.copy()
@@ -633,6 +811,12 @@ def variant_images(image, seed):
         "cropped": cropped,
         "skewed": skewed,
         "mobile_photo": mobile_photo,
+        "low_light": apply_low_light(image, rng),
+        "overexposed": apply_overexposed(image, rng),
+        "shadow": apply_shadow(image, rng),
+        "partial_crop": apply_partial_crop(image, rng),
+        "low_resolution": apply_low_resolution(image, rng),
+        "jpeg_heavy_compression": apply_jpeg_heavy_compression(image, rng),
     }
 
 
@@ -646,18 +830,18 @@ def save_variant_image(image, path, ext):
 
 
 def export_side(data, side, image, paths):
-    stem = output_stem(data)
+    stem = output_stem(data, side)
     seed = int(data["id"]) * 1000 + (1 if side == "front" else 2)
 
     for variant, variant_image in variant_images(image, seed).items():
         ext = IMAGE_VARIANTS[variant]
-        image_path = AADHAR_OUTPUT_DIR / f"{stem}_{side}_{variant}.{ext}"
+        image_path = AADHAR_OUTPUT_DIR / f"{stem}_{variant}.{ext}"
         save_variant_image(variant_image, image_path, ext)
         json_path = save_ground_truth(data, side, variant, image_path)
         paths[f"{side}_{variant}_{ext}"] = image_path
         paths[f"{side}_{variant}_json"] = json_path
 
-    pdf_path = AADHAR_OUTPUT_DIR / f"{stem}_{side}.pdf"
+    pdf_path = AADHAR_OUTPUT_DIR / f"{stem}.pdf"
     image.save(pdf_path, "PDF", resolution=100.0)
     paths[f"{side}_pdf"] = pdf_path
 
@@ -668,11 +852,16 @@ def build_data_from_args(args):
         "fullname": (args.fullname or "").strip(),
         "hindi_name": (args.hindi_name or "").strip(),
         "fathername": (args.fathername or "").strip(),
+        "relationship_type": (args.relationship_type or "father").strip(),
+        "relationship_label": (args.relationship_label or args.relationship_type or "Father").strip(),
+        "relationship_name": (args.relationship_name or args.fathername or "").strip(),
+        "relationship_hindi_name": (args.relationship_hindi_name or "").strip(),
         "email": (args.email or "").strip(),
         "gender": (args.gender or "1").strip(),
         "bloodgroup": (args.bloodgroup or "A+").strip(),
         "mobile": (args.mobile or "").strip(),
         "dob": (args.dob or "").strip(),
+        "dob_display": (args.dob_display or "yob").strip(),
         "house": (args.house or "").strip(),
         "street": (args.street or "").strip(),
         "city": (args.city or "").strip(),
@@ -716,12 +905,15 @@ def prompt_for_inputs():
         "id": int(ask("Record ID (optional, integer)", "0") or 0),
         "fullname": ask("Full name", required=True),
         "hindi_name": ask("Hindi name (optional)"),
-        "fathername": "",
+        "relationship_label": ask("Relationship label (Father/S/O/C/O/W/O/Husband)", "Father"),
+        "relationship_name": ask("Relationship name", required=True),
+        "relationship_hindi_name": ask("Relationship Hindi name (optional)"),
         "email": ask("Email (optional)"),
         "gender": ask("Gender (1=Male, 2=Female)", "1"),
         "bloodgroup": ask("Blood group", "A+"),
         "mobile": ask("Mobile number (digits)", required=True),
         "dob": ask("Date of birth (YYYY-MM-DD)", required=True),
+        "dob_display": ask("DOB display on front (yob/dob/random)", "yob"),
         "house": ask("House number (optional)"),
         "street": ask("Street name (optional)"),
         "city": ask("City", required=True),
@@ -732,6 +924,8 @@ def prompt_for_inputs():
 
     if not data["hindi_name"]:
         data["hindi_name"] = hindi_name_for(data["fullname"])
+
+    data["fathername"] = data["relationship_name"]
 
     normalized = str(data["gender"]).strip().lower()
     if normalized in {"1", "male", "m", "पुरुष"}:
@@ -848,11 +1042,31 @@ def main():
     parser.add_argument("--fullname", help="Full name for the generated record.")
     parser.add_argument("--hindi-name", dest="hindi_name", help="Hindi name for the generated record.")
     parser.add_argument("--fathername", help="Father's name for the generated record.")
+    parser.add_argument(
+        "--relationship-type",
+        choices=("father", "husband", "care_of", "s/o", "c/o", "w/o"),
+        default="father",
+        help="Backward-compatible relationship type for the back side.",
+    )
+    parser.add_argument(
+        "--relationship-label",
+        choices=("Father", "S/O", "C/O", "W/O", "Husband"),
+        default=None,
+        help="Exact relationship label printed on the back side.",
+    )
+    parser.add_argument("--relationship-name", help="Relationship name printed on the back side.")
+    parser.add_argument("--relationship-hindi-name", help="Hindi relationship name printed on the back side.")
     parser.add_argument("--email", help="Email address for the generated record.")
     parser.add_argument("--gender", help="Gender value for the generated record (1/2/male/female).")
     parser.add_argument("--bloodgroup", help="Blood group for the generated record.")
     parser.add_argument("--mobile", help="Mobile phone number for the generated record.")
     parser.add_argument("--dob", help="Date of birth for the generated record.")
+    parser.add_argument(
+        "--dob-display",
+        choices=("yob", "dob", "random"),
+        default="yob",
+        help="Birth field printed on the front side.",
+    )
     parser.add_argument("--house", help="House number for the generated record.")
     parser.add_argument("--street", help="Street name for the generated record.")
     parser.add_argument("--city", help="City for the generated record.")
