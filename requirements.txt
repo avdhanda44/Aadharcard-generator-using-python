@@ -2,3 +2,5 @@ pillow
 pyqrcode
 pypng
 notebook
+reportlab
+pdfplumber

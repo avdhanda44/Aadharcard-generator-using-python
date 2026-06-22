@@ -10,14 +10,32 @@ from tkinter import Button, Entry, IntVar, Label, OptionMenu, StringVar, Tk, mes
 
 import pyqrcode
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageTk
+from reportlab.lib.colors import HexColor, black
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas as pdf_canvas
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "AadharForm.db"
 OUTPUT_DIR = BASE_DIR / "outputs"
 AADHAR_OUTPUT_DIR = OUTPUT_DIR / "aadhar"
+AADHAR_IMAGE_DIR = AADHAR_OUTPUT_DIR / "image"
+AADHAR_PDF_DIR = AADHAR_OUTPUT_DIR / "pdf"
+AADHAR_SCANNED_PDF_DIR = AADHAR_PDF_DIR / "scanned"
+AADHAR_DIGITAL_PDF_DIR = AADHAR_PDF_DIR / "digital"
 GROUND_TRUTH_DIR = OUTPUT_DIR / "ground_truth"
-QR_PATH = AADHAR_OUTPUT_DIR / "latest_qr.png"
+GROUND_TRUTH_IMAGE_DIR = GROUND_TRUTH_DIR / "image"
+GROUND_TRUTH_PDF_DIR = GROUND_TRUTH_DIR / "pdf"
+GROUND_TRUTH_SCANNED_PDF_DIR = GROUND_TRUTH_PDF_DIR / "scanned"
+GROUND_TRUTH_DIGITAL_PDF_DIR = GROUND_TRUTH_PDF_DIR / "digital"
+QR_PATH = AADHAR_IMAGE_DIR / "latest_qr.png"
+
+PDF_FONT_REGULAR = "AadhaarLatin"
+PDF_FONT_BOLD = "AadhaarLatinBold"
+PDF_FONT_DEVANAGARI = "AadhaarDevanagari"
+PDF_FONT_DEVANAGARI_BOLD = "AadhaarDevanagariBold"
 
 IMAGE_VARIANTS = {
     "clean": "png",
@@ -33,6 +51,15 @@ IMAGE_VARIANTS = {
     "low_resolution": "png",
     "jpeg_heavy_compression": "jpg",
 }
+
+DIGITAL_PDF_VARIANTS = (
+    "clean_digital",
+    "rotated_page",
+    "skewed_text",
+    "cropped_page",
+    "partial_content",
+    "low_contrast_text",
+)
 
 
 FIELDS = [
@@ -74,6 +101,22 @@ def devanagari_font(size, bold=False):
         if Path(candidate).exists():
             return ImageFont.truetype(candidate, size)
     return font(size, bold=bold)
+
+
+def register_pdf_fonts():
+    font_files = {
+        PDF_FONT_REGULAR: "/System/Library/Fonts/Supplemental/Arial.ttf",
+        PDF_FONT_BOLD: "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        PDF_FONT_DEVANAGARI: "/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc",
+        PDF_FONT_DEVANAGARI_BOLD: "/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc",
+    }
+
+    for font_name, font_path in font_files.items():
+        if font_name in pdfmetrics.getRegisteredFontNames():
+            continue
+        if not Path(font_path).is_file():
+            raise FileNotFoundError(f"Required PDF font not found: {font_path}")
+        pdfmetrics.registerFont(TTFont(font_name, font_path))
 
 
 def ensure_database():
@@ -460,7 +503,7 @@ def format_year(value):
 
 
 def create_card_image(data):
-    AADHAR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    AADHAR_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     record_id = int(data["id"])
     card_number = aadhaar_number(record_id)
     qr = pyqrcode.create(f"DEMO\n{card_number}\n{data['fullname']}\n{data['mobile']}")
@@ -504,7 +547,7 @@ def create_card_image(data):
 
 
 def create_back_card_image(data):
-    AADHAR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    AADHAR_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     record_id = int(data["id"])
     card_number = aadhaar_number(record_id)
 
@@ -563,7 +606,17 @@ def output_stem(data, side):
     first_name = parts[0] if parts else "unknown"
     last_name = parts[-1] if len(parts) > 1 else first_name
     dob = normalized_date(data["dob"])
-    return f"{last_name}_{first_name}_{side}_{dob}"
+    record_id = int(data.get("id") or 0)
+    return f"{last_name}_{first_name}_{dob}_{record_id:04d}_{side}"
+
+
+def combined_output_stem(data):
+    parts = re.findall(r"[A-Za-z0-9]+", str(data["fullname"]).lower())
+    first_name = parts[0] if parts else "unknown"
+    last_name = parts[-1] if len(parts) > 1 else first_name
+    dob = normalized_date(data["dob"])
+    record_id = int(data.get("id") or 0)
+    return f"{last_name}_{first_name}_{dob}_{record_id:04d}"
 
 
 def full_address_for_ground_truth(data):
@@ -639,10 +692,95 @@ def ground_truth_payload(data, side, variant, source_file):
     raise ValueError("side must be one of: front, back")
 
 
-def save_ground_truth(data, side, variant, source_file):
-    GROUND_TRUTH_DIR.mkdir(parents=True, exist_ok=True)
-    path = GROUND_TRUTH_DIR / f"{output_stem(data, side)}_{variant}.json"
+def save_ground_truth(data, side, variant, source_file, output_type="image"):
+    if output_type == "image":
+        output_dir = GROUND_TRUTH_IMAGE_DIR
+    elif output_type == "scanned_pdf":
+        output_dir = GROUND_TRUTH_SCANNED_PDF_DIR
+    else:
+        raise ValueError("output_type must be one of: image, scanned_pdf")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"{Path(source_file).stem}.json"
     payload = ground_truth_payload(data, side, variant, source_file)
+    if output_type == "scanned_pdf":
+        payload = {
+            "pdf_type": "scanned",
+            "pages": {"1": side},
+            side: payload,
+        }
+    path.write_text(json.dumps(payload, indent=4, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def save_combined_pdf_ground_truth(data, variant, source_file):
+    GROUND_TRUTH_SCANNED_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    path = GROUND_TRUTH_SCANNED_PDF_DIR / f"{Path(source_file).stem}.json"
+    payload = {
+        "pdf_type": "scanned",
+        "pages": {
+            "1": "front",
+            "2": "back",
+        },
+        "front": ground_truth_payload(data, "front", variant, source_file),
+        "back": ground_truth_payload(data, "back", variant, source_file),
+    }
+    path.write_text(json.dumps(payload, indent=4, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def digital_unavailable_fields(data, side, variant):
+    if variant == "cropped_page":
+        return ["aadhaar_number"]
+
+    if variant != "partial_content":
+        return []
+
+    if side == "front":
+        return ["name", "hindi_name"]
+
+    relationship_type = relationship_type_for(data)
+    fields = ["relationship_label", "hindi_relationship_label"]
+    if relationship_type == "care_of":
+        fields.extend(["care_of", "hindi_care_of"])
+    elif relationship_type == "husband":
+        fields.extend(["husband_name", "hindi_husband_name"])
+    else:
+        fields.extend(["father_name", "hindi_father_name"])
+    return fields
+
+
+def digital_ground_truth_for_side(data, side, variant, source_file):
+    ground_truth = ground_truth_payload(data, side, variant, source_file)
+    unavailable_fields = digital_unavailable_fields(data, side, variant)
+
+    for field_name in unavailable_fields:
+        ground_truth[field_name] = ""
+
+    return ground_truth, unavailable_fields
+
+
+def save_digital_pdf_ground_truth(data, sides, variant, source_file):
+    GROUND_TRUTH_DIGITAL_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    path = GROUND_TRUTH_DIGITAL_PDF_DIR / f"{Path(source_file).stem}.json"
+    payload = {
+        "pdf_type": "digital",
+        "variant": variant,
+        "pages": {
+            str(page_number): side
+            for page_number, side in enumerate(sides, start=1)
+        },
+        "intentionally_unavailable_fields": {},
+    }
+    for side in sides:
+        side_ground_truth, unavailable_fields = digital_ground_truth_for_side(
+            data,
+            side,
+            variant,
+            source_file,
+        )
+        payload[side] = side_ground_truth
+        payload["intentionally_unavailable_fields"][side] = unavailable_fields
     path.write_text(json.dumps(payload, indent=4, ensure_ascii=False), encoding="utf-8")
     return path
 
@@ -829,21 +967,301 @@ def save_variant_image(image, path, ext):
     image.save(path)
 
 
-def export_side(data, side, image, paths):
+def export_side_images(data, side, image, paths):
     stem = output_stem(data, side)
     seed = int(data["id"]) * 1000 + (1 if side == "front" else 2)
+    variants = variant_images(image, seed)
 
-    for variant, variant_image in variant_images(image, seed).items():
+    for variant, variant_image in variants.items():
         ext = IMAGE_VARIANTS[variant]
-        image_path = AADHAR_OUTPUT_DIR / f"{stem}_{variant}.{ext}"
+        image_path = AADHAR_IMAGE_DIR / f"{stem}_{variant}.{ext}"
         save_variant_image(variant_image, image_path, ext)
-        json_path = save_ground_truth(data, side, variant, image_path)
+        image_json_path = save_ground_truth(data, side, variant, image_path, output_type="image")
         paths[f"{side}_{variant}_{ext}"] = image_path
-        paths[f"{side}_{variant}_json"] = json_path
+        paths[f"{side}_{variant}_json"] = image_json_path
 
-    pdf_path = AADHAR_OUTPUT_DIR / f"{stem}.pdf"
-    image.save(pdf_path, "PDF", resolution=100.0)
-    paths[f"{side}_pdf"] = pdf_path
+    return variants
+
+
+def export_single_side_pdfs(data, side, variants, paths):
+    stem = output_stem(data, side)
+    AADHAR_SCANNED_PDF_DIR.mkdir(parents=True, exist_ok=True)
+
+    for variant, variant_image in variants.items():
+        pdf_path = AADHAR_SCANNED_PDF_DIR / f"{stem}_{variant}.pdf"
+        variant_image.convert("RGB").save(pdf_path, "PDF", resolution=100.0)
+        pdf_json_path = save_ground_truth(
+            data,
+            side,
+            variant,
+            pdf_path,
+            output_type="scanned_pdf",
+        )
+        paths[f"{side}_{variant}_pdf"] = pdf_path
+        paths[f"{side}_{variant}_pdf_json"] = pdf_json_path
+
+        if variant == "clean":
+            # Preserve the existing GUI and caller keys for the primary PDF.
+            paths[f"{side}_pdf"] = pdf_path
+            paths[f"{side}_pdf_json"] = pdf_json_path
+
+
+def export_combined_pdfs(data, front_variants, back_variants, paths):
+    stem = combined_output_stem(data)
+    AADHAR_SCANNED_PDF_DIR.mkdir(parents=True, exist_ok=True)
+
+    for variant in IMAGE_VARIANTS:
+        front_image = front_variants[variant].convert("RGB")
+        back_image = back_variants[variant].convert("RGB")
+        pdf_path = AADHAR_SCANNED_PDF_DIR / f"{stem}_{variant}.pdf"
+        front_image.save(
+            pdf_path,
+            "PDF",
+            resolution=100.0,
+            save_all=True,
+            append_images=[back_image],
+        )
+        pdf_json_path = save_combined_pdf_ground_truth(data, variant, pdf_path)
+        paths[f"both_{variant}_pdf"] = pdf_path
+        paths[f"both_{variant}_pdf_json"] = pdf_json_path
+
+        if variant == "clean":
+            paths["both_pdf"] = pdf_path
+            paths["both_pdf_json"] = pdf_json_path
+
+
+def pdf_y(top_y, height=0):
+    return 600 - top_y - height
+
+
+def digital_text_color(color, variant):
+    if variant != "low_contrast_text":
+        return color
+
+    if color == HexColor("#e1221d"):
+        return HexColor("#d5a5a3")
+    if color in {HexColor("#073d16"), HexColor("#2b1a10"), HexColor("#9c2b22")}:
+        return HexColor("#8e9a8e")
+    return HexColor("#9a9a94")
+
+
+def draw_pdf_text(
+    canvas,
+    x,
+    top_y,
+    text,
+    size=18,
+    bold=False,
+    hindi=False,
+    color=black,
+    variant="clean_digital",
+):
+    font_name = (
+        PDF_FONT_DEVANAGARI_BOLD
+        if hindi and bold
+        else PDF_FONT_DEVANAGARI
+        if hindi
+        else PDF_FONT_BOLD
+        if bold
+        else PDF_FONT_REGULAR
+    )
+    baseline_y = pdf_y(top_y, size)
+    canvas.saveState()
+    canvas.setFont(font_name, size)
+    canvas.setFillColor(digital_text_color(color, variant))
+
+    if variant == "skewed_text":
+        canvas.translate(x, baseline_y)
+        canvas.skew(4, 0)
+        canvas.drawString(0, 0, str(text))
+    else:
+        canvas.drawString(x, baseline_y, str(text))
+
+    canvas.restoreState()
+
+
+def draw_pdf_image(canvas, path, x, top_y, width, height, preserve_aspect=True):
+    path = Path(path)
+    if not path.is_file():
+        return
+    canvas.drawImage(
+        ImageReader(str(path)),
+        x,
+        pdf_y(top_y, height),
+        width=width,
+        height=height,
+        preserveAspectRatio=preserve_aspect,
+        anchor="c",
+        mask="auto",
+    )
+
+
+def draw_pdf_photo(canvas, data, x, top_y, width, height, variant="clean_digital"):
+    photo_path = Path(str(data.get("photo_path") or "")).expanduser()
+    if photo_path.is_file():
+        draw_pdf_image(canvas, photo_path, x, top_y, width, height)
+        return
+
+    canvas.setFillColor(HexColor("#e7eef5"))
+    canvas.rect(x, pdf_y(top_y, height), width, height, stroke=0, fill=1)
+    canvas.setFillColor(HexColor("#9aa7b5"))
+    canvas.circle(x + width * 0.5, pdf_y(top_y + height * 0.3), width * 0.16, stroke=0, fill=1)
+    canvas.roundRect(
+        x + width * 0.2,
+        pdf_y(top_y + height * 0.92),
+        width * 0.6,
+        height * 0.44,
+        14,
+        stroke=0,
+        fill=1,
+    )
+    draw_pdf_text(
+        canvas,
+        x + 12,
+        top_y + height - 24,
+        "SAMPLE PHOTO",
+        size=12,
+        color=HexColor("#56616d"),
+        variant=variant,
+    )
+
+
+def draw_digital_front(canvas, data, variant):
+    card_number = aadhaar_number(int(data["id"]))
+    canvas.setFillColor(HexColor("#fbfbf6"))
+    canvas.rect(0, 0, 900, 600, stroke=0, fill=1)
+    canvas.setStrokeColor(black)
+    canvas.setLineWidth(2)
+    canvas.rect(6, 6, 888, 588, stroke=1, fill=0)
+    canvas.setFillColor(HexColor("#f59a22"))
+    canvas.rect(255, pdf_y(30, 48), 510, 48, stroke=0, fill=1)
+    canvas.setFillColor(HexColor("#42b84e"))
+    canvas.rect(260, pdf_y(80, 45), 517, 45, stroke=0, fill=1)
+    draw_pdf_image(canvas, BASE_DIR / "INDIANEMBLEM.png", 102, 26, 78, 78)
+    draw_pdf_text(canvas, 418, 36, "भारत सरकार", size=35, bold=True, hindi=True, color=HexColor("#2b1a10"), variant=variant)
+    draw_pdf_text(canvas, 370, 84, "GOVERNMENT OF INDIA", size=33, bold=True, color=HexColor("#073d16"), variant=variant)
+    draw_pdf_photo(canvas, data, 52, 152, 210, 270, variant=variant)
+    text_x = 285
+    if variant != "partial_content":
+        draw_pdf_text(
+            canvas,
+            text_x,
+            146,
+            data.get("hindi_name") or hindi_name_for(data["fullname"]),
+            size=29,
+            bold=True,
+            hindi=True,
+            variant=variant,
+        )
+        draw_pdf_text(canvas, text_x, 190, data["fullname"], size=29, variant=variant)
+    draw_pdf_text(canvas, text_x, 263, front_birth_label(data), size=27, hindi=True, variant=variant)
+    draw_pdf_text(canvas, text_x, 318, gender_label(data["gender"]), size=27, hindi=True, variant=variant)
+    draw_pdf_image(canvas, QR_PATH, 650, 250, 205, 205, preserve_aspect=False)
+    if variant != "cropped_page":
+        draw_pdf_text(canvas, 270, 470, card_number, size=43, bold=True, variant=variant)
+    canvas.setStrokeColor(HexColor("#e1221d"))
+    canvas.setLineWidth(4)
+    canvas.line(0, pdf_y(525), 900, pdf_y(525))
+    draw_pdf_text(canvas, 115, 548, "आधार", size=39, bold=True, hindi=True, color=HexColor("#e1221d"), variant=variant)
+    draw_pdf_text(canvas, 250, 548, "- आम आदमी का अधिकार", size=39, bold=True, hindi=True, variant=variant)
+
+
+def draw_digital_back(canvas, data, variant):
+    card_number = aadhaar_number(int(data["id"]))
+    canvas.setFillColor(HexColor("#fbfbf6"))
+    canvas.rect(0, 0, 900, 600, stroke=0, fill=1)
+    canvas.setStrokeColor(black)
+    canvas.setLineWidth(2)
+    canvas.roundRect(8, 8, 884, 584, 16, stroke=1, fill=0)
+    draw_pdf_image(canvas, BASE_DIR / "Aadhaar.png", 78, 35, 110, 82)
+    canvas.setFillColor(HexColor("#f59a22"))
+    canvas.rect(250, pdf_y(34, 38), 500, 38, stroke=0, fill=1)
+    canvas.setFillColor(HexColor("#42b84e"))
+    canvas.rect(255, pdf_y(76, 36), 505, 36, stroke=0, fill=1)
+    draw_pdf_text(
+        canvas,
+        350,
+        38,
+        "भारतीय विशिष्ट पहचान प्राधिकरण",
+        size=23,
+        bold=True,
+        hindi=True,
+        color=HexColor("#9c2b22"),
+        variant=variant,
+    )
+    draw_pdf_text(
+        canvas,
+        285,
+        80,
+        "UNIQUE IDENTIFICATION AUTHORITY OF INDIA",
+        size=23,
+        bold=True,
+        color=HexColor("#073d16"),
+        variant=variant,
+    )
+    hindi_lines = hindi_address_for(data)
+    english_lines = english_address_for(data)
+    if variant == "partial_content":
+        hindi_lines = [line for index, line in enumerate(hindi_lines) if index != 1]
+        english_lines = [line for index, line in enumerate(english_lines) if index != 0]
+    for index, line in enumerate(hindi_lines):
+        draw_pdf_text(canvas, 55, 165 + index * 37, line, size=24 if index == 0 else 22, bold=index == 0, hindi=True, variant=variant)
+    for index, line in enumerate(english_lines):
+        draw_pdf_text(canvas, 470, 165 + index * 37, line, size=24 if index == 0 else 22, bold=index == 0, variant=variant)
+    if variant != "cropped_page":
+        draw_pdf_text(canvas, 285, 430, card_number, size=39, bold=True, variant=variant)
+    canvas.setStrokeColor(HexColor("#e1221d"))
+    canvas.setLineWidth(4)
+    canvas.line(0, pdf_y(480), 900, pdf_y(480))
+    draw_pdf_text(canvas, 110, 530, "1947", size=17, bold=True, variant=variant)
+    draw_pdf_text(canvas, 82, 558, "1800 180 1947", size=17, bold=True, variant=variant)
+    draw_pdf_text(canvas, 280, 540, "help@uidai.gov.in", size=17, bold=True, variant=variant)
+    draw_pdf_text(canvas, 500, 540, "www.uidai.gov.in", size=17, bold=True, variant=variant)
+    draw_pdf_text(canvas, 690, 525, "P.O. Box No. 1947,", size=16, bold=True, variant=variant)
+    draw_pdf_text(canvas, 690, 553, "Bengaluru-560 001", size=16, bold=True, variant=variant)
+
+
+def begin_digital_page_variant(canvas, variant):
+    canvas.saveState()
+
+    if variant == "rotated_page":
+        canvas.translate(450, 300)
+        canvas.rotate(3)
+        canvas.translate(-450, -300)
+    elif variant == "cropped_page":
+        clip_path = canvas.beginPath()
+        clip_path.rect(0, 180, 900, 420)
+        canvas.clipPath(clip_path, stroke=0, fill=0)
+
+
+def export_digital_pdfs(data, side, paths):
+    register_pdf_fonts()
+    AADHAR_DIGITAL_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    sides = ["front", "back"] if side == "both" else [side]
+    stem = combined_output_stem(data) if side == "both" else output_stem(data, side)
+
+    for variant in DIGITAL_PDF_VARIANTS:
+        pdf_path = AADHAR_DIGITAL_PDF_DIR / f"{stem}_{variant}.pdf"
+        canvas = pdf_canvas.Canvas(str(pdf_path), pagesize=(900, 600), pageCompression=1)
+        canvas.setTitle(f"Demo Aadhaar - {data['fullname']} - {variant}")
+
+        for page_side in sides:
+            begin_digital_page_variant(canvas, variant)
+            if page_side == "front":
+                draw_digital_front(canvas, data, variant)
+            else:
+                draw_digital_back(canvas, data, variant)
+            canvas.restoreState()
+            canvas.showPage()
+
+        canvas.save()
+        json_path = save_digital_pdf_ground_truth(data, sides, variant, pdf_path)
+        paths[f"{side}_{variant}_pdf"] = pdf_path
+        paths[f"{side}_{variant}_pdf_json"] = json_path
+
+        if variant == "clean_digital":
+            paths[f"{side}_digital_pdf"] = pdf_path
+            paths[f"{side}_digital_pdf_json"] = json_path
 
 
 def build_data_from_args(args):
@@ -939,32 +1357,56 @@ def prompt_for_inputs():
 
 
 def clear_previous_outputs():
-    AADHAR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    GROUND_TRUTH_DIR.mkdir(parents=True, exist_ok=True)
-    for path in AADHAR_OUTPUT_DIR.glob("*"):
-        if path.is_file():
-            if path.name == ".gitkeep":
-                continue
-            path.unlink()
+    output_dirs = [
+        AADHAR_IMAGE_DIR,
+        AADHAR_PDF_DIR,
+        GROUND_TRUTH_IMAGE_DIR,
+        GROUND_TRUTH_PDF_DIR,
+    ]
+    for output_dir in output_dirs:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for path in output_dir.rglob("*"):
+            if path.is_file() and path.name != ".gitkeep":
+                path.unlink()
+
     if QR_PATH.exists():
         QR_PATH.unlink()
 
 
-def export_card(data, side="front"):
+def export_card(data, side="front", pdf_type="both"):
     if side not in {"front", "back", "both"}:
         raise ValueError("side must be one of: front, back, both")
+    if pdf_type not in {"scanned", "digital", "both"}:
+        raise ValueError("pdf_type must be one of: scanned, digital, both")
 
-    AADHAR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    GROUND_TRUTH_DIR.mkdir(parents=True, exist_ok=True)
+    AADHAR_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    AADHAR_SCANNED_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    AADHAR_DIGITAL_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    GROUND_TRUTH_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    GROUND_TRUTH_SCANNED_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    GROUND_TRUTH_DIGITAL_PDF_DIR.mkdir(parents=True, exist_ok=True)
     paths = {}
+    front_variants = None
+    back_variants = None
 
     if side in {"front", "both"}:
         front_image = create_card_image(data)
-        export_side(data, "front", front_image, paths)
+        front_variants = export_side_images(data, "front", front_image, paths)
 
     if side in {"back", "both"}:
         back_image = create_back_card_image(data)
-        export_side(data, "back", back_image, paths)
+        back_variants = export_side_images(data, "back", back_image, paths)
+
+    if pdf_type in {"scanned", "both"}:
+        if side == "both":
+            export_combined_pdfs(data, front_variants, back_variants, paths)
+        elif side == "front":
+            export_single_side_pdfs(data, "front", front_variants, paths)
+        else:
+            export_single_side_pdfs(data, "back", back_variants, paths)
+
+    if pdf_type in {"digital", "both"}:
+        export_digital_pdfs(data, side, paths)
 
     if QR_PATH.exists():
         QR_PATH.unlink()
@@ -1038,6 +1480,12 @@ def main():
         default="both",
         help="Which side to export. Default: both.",
     )
+    parser.add_argument(
+        "--pdf-type",
+        choices=("scanned", "digital", "both"),
+        default="both",
+        help="PDF format to generate. Default: both.",
+    )
     parser.add_argument("--record-id", type=int, default=0, help="Integer ID used to generate a demo Aadhaar number and output filename.")
     parser.add_argument("--fullname", help="Full name for the generated record.")
     parser.add_argument("--hindi-name", dest="hindi_name", help="Hindi name for the generated record.")
@@ -1074,7 +1522,18 @@ def main():
     parser.add_argument("--pincode", help="Pincode for the generated record.")
     parser.add_argument("--photo-path", help="Optional photo path for the generated record.")
     parser.add_argument("--prompt", action="store_true", help="Ask for input values interactively in the terminal.")
+    parser.add_argument(
+        "--clear-output",
+        action="store_true",
+        help="Delete generated images, PDFs, and ground-truth JSON before continuing.",
+    )
     args = parser.parse_args()
+
+    if args.clear_output:
+        clear_previous_outputs()
+        print("Generated output files cleared.")
+        if not args.latest and not args.prompt and not args.fullname:
+            return
 
     if args.latest:
         record = latest_record()
@@ -1093,7 +1552,7 @@ def main():
         run_gui()
         return
 
-    paths = export_card(data, side=args.side)
+    paths = export_card(data, side=args.side, pdf_type=args.pdf_type)
     for label, path in paths.items():
         print(f"{label}: {path}")
 

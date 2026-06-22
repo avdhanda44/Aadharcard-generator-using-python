@@ -1,63 +1,72 @@
-# Aadharcard-generator-using-python
-This is a Python project that collects form details and generates a demo Aadhaar-style preview.
+# Aadhaar Demo Generator
 
-The original project runs from `Aadhar generator.ipynb` in Jupyter Notebook.
+Generates Aadhaar-style images, scanned PDFs, selectable-text digital PDFs, and matching ground-truth JSON.
 
-This repo now also includes a Python 3 GUI script that saves the front demo output as PNG and PDF:
+## Setup
 
 ```bash
+python3 -m venv .venv
 source .venv/bin/activate
-python aadhar_demo_generator.py
+uv --cache-dir .uv-cache pip install --python .venv/bin/python -r requirements.txt
 ```
 
-After clicking **Save Front PNG + PDF**, files are saved in:
+## Generate
 
-```text
-outputs/aadhar/
-```
-
-An empty folder is also kept for future labels/metadata:
-
-```text
-outputs/ground_truth/
-```
-
-You can also export the latest saved database record without opening the GUI:
+Generate images plus scanned and digital PDFs:
 
 ```bash
-python aadhar_demo_generator.py --latest
+uv --cache-dir .uv-cache run python aadhar_demo_generator.py --latest --side both --pdf-type both
 ```
 
-The command exports the front by default. You can choose the side:
+PDF modes:
 
 ```bash
-python aadhar_demo_generator.py --latest --side front
-python aadhar_demo_generator.py --latest --side back
-python aadhar_demo_generator.py --latest --side both
+uv --cache-dir .uv-cache run python aadhar_demo_generator.py --latest --side both --pdf-type scanned
+uv --cache-dir .uv-cache run python aadhar_demo_generator.py --latest --side both --pdf-type digital
+uv --cache-dir .uv-cache run python aadhar_demo_generator.py --latest --side both --pdf-type both
 ```
 
-Saved data remains in:
+`--pdf-type` defaults to `both`. With `--side both`, page 1 is the front and page 2 is the back.
+
+## Outputs
 
 ```text
-AadharForm.db
+outputs/
+├── aadhar/
+│   ├── image/
+│   └── pdf/
+│       ├── scanned/
+│       └── digital/
+└── ground_truth/
+    ├── image/
+    └── pdf/
+        ├── scanned/
+        └── digital/
 ```
 
-Generated outputs are clearly marked `DEMO / NOT VALID ID` in the header/footer so OCR fields remain readable.
-
-The form also has an optional `Photo Path` field. If you provide a local image path, the front side uses that image; otherwise it creates a neutral sample photo placeholder.
-
-The front side uses an Aadhaar-inspired layout for OCR testing: emblem, brush header, large photo, details, QR code, number, and slogan band.
-
-Front output uses:
+Scanned PDFs contain the 12 image-quality variants. Digital PDFs contain six selectable-text variants:
 
 ```text
-lastname_firstname_yyyymmdd_id_front.png
-lastname_firstname_yyyymmdd_id_front.pdf
+clean_digital
+rotated_page
+skewed_text
+cropped_page
+partial_content
+low_contrast_text
 ```
 
-Back output uses:
+Every PDF has matching JSON with the same stem and a `pdf_type` value of `scanned` or `digital`. Cropped and partial-content JSON identifies fields intentionally unavailable for accuracy evaluation.
 
-```text
-lastname_firstname_yyyymmdd_id_back.png
-lastname_firstname_yyyymmdd_id_back.pdf
+Quality variants: `clean`, `rotated`, `blurred`, `cropped`, `skewed`, `mobile_photo`, `low_light`, `overexposed`, `shadow`, `partial_crop`, `low_resolution`, and `jpeg_heavy_compression`.
+
+## Clear Outputs
+
+```bash
+uv --cache-dir .uv-cache run python aadhar_demo_generator.py --clear-output
+```
+
+Clear and regenerate:
+
+```bash
+uv --cache-dir .uv-cache run python aadhar_demo_generator.py --clear-output --latest --side both --pdf-type both
 ```
